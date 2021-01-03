@@ -715,5 +715,10 @@ bool testWinAgainstRandomized() {
 int main() {
 //    test();
     game();
+
+    // todo move code into classes
+    // todo reduce memory
+    // todo figure out good simulate() for start of game
+
     return 0;
 }
