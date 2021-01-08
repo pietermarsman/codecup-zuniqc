@@ -300,7 +300,7 @@ public:
         } else if (moves_left < 40) {
             return min(min_move_time * 2.0F, max_move_time);
         } else {
-            return min(min_move_time * 0.5F, max_move_time);
+            return min(min_move_time * 1.0F, max_move_time);
         }
     }
 
@@ -437,9 +437,18 @@ uint positionToInt(const string &pos) {
     throw invalid_argument("Cannot convert '" + pos + "' to integer");
 }
 
+bool sureWin(const shared_ptr<Node>& node) {
+    float win_changes = (float) node->wins() / (float) node->n;
+    if ((node-> n > 10000) && (win_changes > 0.9)) {
+        return true;
+    }
+    return false;
+}
+
 void game() {
     float total_ms = 0;
     Mcts mcts = Mcts(State{}, sqrt(2.0F), 2);
+    bool i_am_winning = false;
 
     string text = read();
     while (text != QUIT) {
@@ -458,7 +467,13 @@ void game() {
         mcts.updateRoot(best_node->m);
         logMcts(best_node);
         logState(best_node->s, 1);
-        write(INT_TO_POSITION[best_node->m]);
+
+        if (!i_am_winning && sureWin(best_node)) {
+            write(INT_TO_POSITION[best_node->m] + "!");
+            i_am_winning = true;
+        } else {
+            write(INT_TO_POSITION[best_node->m]);
+        }
 
         auto end_time = high_resolution_clock::now();
         total_ms += duration_cast<milliseconds>(end_time - start_time).count();
