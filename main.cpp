@@ -40,8 +40,8 @@ const string VDASH = "┊";
 // Combined types.
 class State {
 public:
-    Board b;
-    Zones z;
+    Board b = 0;
+    Zones z = 0;
 
     // State functions.
     [[nodiscard]] optional<State> play(Move m) const {
@@ -56,9 +56,6 @@ public:
             return nullopt;
         }
         Zones zz = updateZones(z, zone);
-
-        // Only valid if 1 wall is added, or (if more) the number of
-        // zones has increased
         return State{bb, zz};
     }
 
@@ -69,7 +66,7 @@ public:
             if (bits[i] == 0) {
                 auto maybe_s = play(i);
                 if (maybe_s.has_value()) {
-                    moves[i] = maybe_s.value();
+                    moves[i] = *maybe_s;
                 }
             }
         }
@@ -108,6 +105,15 @@ public:
     // Required for hash map.
     bool operator==(const State &s) const {
         return b == s.b && z == s.z;
+    }
+
+    [[nodiscard]] ulong simulate() const {
+        auto maybe_state = randomMove();
+        if (maybe_state.has_value()) {
+            return 1 - maybe_state.value().second.simulate();
+        } else {
+            return 0;
+        }
     }
 
 private:
@@ -166,177 +172,162 @@ private:
     }
 };
 
-namespace std {
 
-    template<>
-    struct [[maybe_unused]] hash<State> {
-        std::size_t operator()(const State &s) const {
-            return hash<Board>()(s.b) ^ hash<Zones>()(s.z);
+class Node {
+public:
+    Node *p = nullptr;
+    Move m = 0;  // most recent move
+    State s = State{};
+    uint depth = 0;
+
+    bool expanded = false;
+    vector<shared_ptr<Node>> children;
+
+    ulong n = 0;
+    ulong w = 0;
+
+    // Create root node of t; no p
+    explicit Node(State state) {
+        s = state;
+    }
+
+    // Create intermediate node of t
+    explicit Node(Node *parent, Move move, State state) {
+        p = parent;
+        m = move;
+        s = state;
+        depth = parent->depth + 1;
+    }
+
+    // mcts functions.
+    shared_ptr<Node> bestMove(float c) {
+        shared_ptr<Node> best;
+        float best_score = -INFINITY;
+        for (const auto &child: children) {
+            const float link_score = child->score(c);
+            if (link_score > best_score) {
+                best = child;
+                best_score = link_score;
+            }
         }
-    };
-}
+        return best;
+    }
 
-// MCTS state.
-using Visits = unordered_map<State, ulong>;
-using Plays = unordered_map<State, unordered_map<Move, ulong>>;
-using Wins = unordered_map<State, unordered_map<Move, ulong>>;
-using Children = unordered_map<State, unordered_map<Move, State>>;
+    // compute score from perspective of parent
+    [[nodiscard]] float score(float c, float eps = 0.0001) const {
+        float n_eps = n + eps;
+        float n_parent_eps = p->n + eps;
+        float wins = (float) n - w;
+
+        return ((float) wins / n_eps)
+               + c * sqrtf(std::log(n_parent_eps) / n_eps);
+    }
+
+    // wins from perspective of parent
+    [[nodiscard]] ulong wins() const {
+        return n - w;
+    }
+
+    void expand() {
+        assert (!expanded);
+        for (auto move_state : s.validMoves()) {
+            auto child = make_shared<Node>(this, move_state.first,
+                                           move_state.second);
+            children.push_back(child);
+        }
+        expanded = true;
+    }
+
+    void backPropagate(ulong win) {
+        n++;
+        w += win;
+        if (p) {
+            p->backPropagate(1 - win);
+        }
+    }
+};
 
 
 class Mcts {
 public:
-    float winChances(State s, Move m) {
-        return ((float) getWins(s, m)) / ((float) getPlays(s, m));
+    explicit Mcts(State s, float constant) {
+        t = make_shared<Node>(s);
+        c = constant;
     }
 
-    pair<Move, State>
-    mcts(State s, float c, float duration_secs) {
+    // Execute mcts searches for fixed duration.
+    shared_ptr<Node>
+    mcts(float duration_secs, float max_iterations = INFINITY) {
         auto start = high_resolution_clock::now();
         auto duration = duration_cast<microseconds>(
                 high_resolution_clock::now() - start);
 
+        ulong i = 0;
         do {
-            search(s, c);
+            i++;
+            search(t);
             duration = duration_cast<microseconds>(
                     high_resolution_clock::now() - start);
-        } while ((duration.count() / 1000.0 / 1000.0) < duration_secs);
+        } while ((duration.count() / 1000.0 / 1000.0) < duration_secs
+                 && i < max_iterations);
 
-        auto children = getChildren(s);
-        pair<Move, State> best_move_state;
-        uint max_plays = 0;
-        for (auto move_state : children) {
-            ulong plays = getPlays(s, move_state.first);
-            if (plays > max_plays) {
-                max_plays = plays;
-                best_move_state = move_state;
+        return getBestMove();
+    }
+
+    void updateRoot(Move move) {
+        shared_ptr<Node> node;
+        for (const auto &child: t->children) {
+            if (child->m == move) {
+                node = child;
             }
         }
-        return best_move_state;
+        t = node;
+        t->p = nullptr;
     }
 
-    ulong simulate(State s) {
-        auto maybe_state = s.randomMove();
-        if (maybe_state.has_value()) {
-            return 1 - simulate(maybe_state.value().second);
+    float timeBudget(float total_time) {
+        float time_left = 29.0F - total_time;
+        float moves_left = t->s.validMoves().size();
+        float max_move_time = time_left / 2.0F;
+        float min_move_time = time_left / (moves_left + 1);
+
+        if (moves_left < 20) {
+            return min(min_move_time * 4.0F, max_move_time);
+        } else if (moves_left < 35) {
+            return min(min_move_time * 2.0F, max_move_time);
         } else {
-            return 0;
-        }
-    }
-
-    static float score(ulong w, ulong n, ulong nParent, float c,
-                       float eps = 0.0001) {
-        float n_eps = n + eps;
-        float n_parent_eps = nParent + 1.0F;
-
-        return ((float) w / n_eps)
-               + c * sqrtf(std::log(n_parent_eps) / n_eps);
-    }
-
-    ulong getVisits(State s) {
-        return visits[s];
-    }
-
-    ulong getPlays(State s, Move m) {
-        auto got = plays.find(s);
-        if (got == plays.end()) {
-            return 0;
-        } else {
-            return got->second[m];
-        }
-    }
-
-    ulong getWins(State s, Move m) {
-        auto got = wins.find(s);
-        if (got == wins.end()) {
-            return 0;
-        } else {
-            return got->second[m];
+            return min(min_move_time * 0.1F, max_move_time);
         }
     }
 
 private:
-    Visits visits = Visits(10000);
-    Plays plays = Plays(10000);
-    Wins wins = Wins(10000);
-    Children children = Children(10000);
+    shared_ptr<Node> t;
+    float c;
 
-    uint search(State s, float c) {
-        if (hasChildren(s)) {
-            pair<Move, State> move_and_state = bestMove(s, c);
-            uint win = 1 - search(move_and_state.second, c);
+    void search(shared_ptr<Node> n) const {
+        while (n->expanded && !n->children.empty()) {
+            n = n->bestMove(c);
+        }
+        if (!n->expanded) {
+            // stopped because it is not yet expanded, not because it has no
+            // children.
+            n->expand();
+        }
+        ulong win = n->s.simulate();
+        n->backPropagate(win);
+    }
 
-            update(s, move_and_state.first, win);
-
-            return win;
-        } else {
-            // s not in mcts_state.children
-            unordered_map<Move, State> moves = s.validMoves();
-            if (moves.empty()) {
-                updateLeaf(s);
-                return 0;
-            } else {
-                setChildren(s, moves);
-
-                // simulate.
-                pair<Move, State> move_and_state = bestMove(s, c);
-                uint win = 1 - simulate(move_and_state.second);
-
-                // update leaf node.
-                update(s, move_and_state.first, win);
-
-                return win;
+    // Best move to play is the one with the most simulations
+    shared_ptr<Node> getBestMove() {
+        shared_ptr<Node> best_node;
+        uint max_n = 0;
+        for (const auto &child : t->children) {
+            if (child->n > max_n) {
+                max_n = child->n;
+                best_node = child;
             }
         }
-    }
-
-
-    void updateLeaf(State s) {
-        visits[s]++;
-    }
-
-    void update(State s, Move m, uint win) {
-        visits[s]++;
-        plays[s][m]++;
-        wins[s][m] += win;
-    }
-
-    void setChildren(State s, unordered_map<Move, State> &moves) {
-        children[s] = moves;
-    }
-
-    bool hasChildren(State s) {
-        return !(children.find(s) == children.end());
-    }
-
-    unordered_map<Move, State> getChildren(State s) {
-        auto got = children.find(s);
-        if (got == children.end()) {
-            return unordered_map<Move, State>{};
-        } else {
-            return got->second;
-        }
-    }
-
-    // mcts functions.
-    pair<Move, State> bestMove(State s, float c) {
-        unordered_map<Move, State> children = getChildren(s);
-        pair<Move, State> best_move_state;
-        float best_score = -INFINITY;
-        for (auto move_state: children) {
-            const Move m = move_state.first;
-
-            ulong wins = getWins(s, m);
-            ulong plays = getPlays(s, m);
-            ulong visits = getVisits(s);
-            const float m_score = score(wins,
-                                        plays,
-                                        visits, c);
-            if (m_score > best_score) {
-                best_move_state = move_state;
-                best_score = m_score;
-            }
-        }
-        return best_move_state;
+        return best_node;
     }
 };
 
@@ -373,10 +364,10 @@ void log(const string &s) {
     std::cerr << s;
 }
 
-void logMcts(Mcts mcts_state, State s, Move m) {
-    float win_chances = mcts_state.winChances(s, m);
-    log("Chances of winning are " + to_string(win_chances) + " after "
-        + to_string(mcts_state.getVisits(s)) + " moves\n");
+void logMcts(const shared_ptr<Node> &node) {
+    float win_chances = (float) node->wins() / (float) node->n;
+    log("Chances of winning are " + to_string(node->wins()) + " / "
+        + to_string(node->n) + " = " + to_string(win_chances));
 }
 
 void logBoard(Board b) {
@@ -434,21 +425,6 @@ void logState(State s, uint verbose = 2) {
     }
 }
 
-float timeBudget(State s, float total_time) {
-    float time_left = 29.0F - total_time;
-    float moves_left = s.validMoves().size();
-    float max_move_time = time_left / 2.0F;
-    float min_move_time = time_left / (moves_left + 1);
-
-    if (moves_left < 20) {
-        return min(min_move_time * 4.0F, max_move_time);
-    } else if (moves_left < 35) {
-        return min(min_move_time * 2.0F, max_move_time);
-    } else {
-        return min(min_move_time * 0.1F, max_move_time);
-    }
-}
-
 uint positionToInt(const string &pos) {
     for (ulong i = 0; i < sizeof(INT_TO_POSITION); i++) {
         if (INT_TO_POSITION[i] == pos) {
@@ -460,7 +436,7 @@ uint positionToInt(const string &pos) {
 
 void game() {
     float total_ms = 0;
-    State s{};
+    Mcts mcts = Mcts(State{}, sqrt(2.0F));
 
     string text = read();
     while (text != QUIT) {
@@ -468,29 +444,25 @@ void game() {
 
         if (text != START) {
             // assuming input is always correct
-            s = s.play(positionToInt(text)).value();
+            Move move = positionToInt(text);
+            mcts.updateRoot(move);
         }
-        float duration = timeBudget(s, total_ms / 1000.0F);
+        float duration = mcts.timeBudget(total_ms / 1000.0F);
         log("Spending " + to_string(duration) + "s of "
             + to_string(30.0F - total_ms / 1000.0F) + "s that are left.\n");
 
-        Mcts mcts_state = {};
-        auto move_state = mcts_state.mcts(s, sqrtf(2.0), duration);
-        logMcts(mcts_state, s, move_state.first);
-        s = move_state.second;
-
-        logState(s, 1);
-        write(INT_TO_POSITION[move_state.first]);
+        auto best_node = mcts.mcts(duration);
+        logMcts(best_node);
+        logState(best_node->s, 1);
+        mcts.updateRoot(best_node->m);
+        write(INT_TO_POSITION[best_node->m]);
 
         auto end_time = high_resolution_clock::now();
         total_ms += duration_cast<milliseconds>(end_time - start_time).count();
+        logState(best_node->s);
         text = read();
     }
 }
-
-// Testing.
-const Board ENCLOSED_SQUARE = 52882452480;
-const Board SINGLE_TILE = 17993564160;
 
 // Testing board.
 bool testPlayWall() {
@@ -565,67 +537,79 @@ bool testInvalidMove() {
 // Test mcts.
 
 bool testSpeedSimulate() {
-    Mcts mcts;
+    auto s = State{};
     auto start = high_resolution_clock::now();
+    ulong wins = 0;
     for (int i = 0; i < 1000; i++) {
-        mcts.simulate(State{});
+        wins += s.simulate();
     }
     auto stop = high_resolution_clock::now();
     auto duration = duration_cast<microseconds>(stop - start);
 //    log(to_string(duration.count()));
-    return duration.count() < 50000;  // 50ms, 50 microseconds per simulation
+    // 50ms, 50 microseconds per simulation
+    return duration.count() < 50000 && wins > 400 && wins < 600;
 }
 
 bool testScore() {
-    Mcts mcts;
-    return Mcts::score(10, 20, 400, 2)
-           < Mcts::score(11, 20, 400, 2)
-           && Mcts::score(10, 20, 400, 2)
-              < Mcts::score(10, 19, 400, 2)
-           && Mcts::score(10, 20, 400, 1)
-              < Mcts::score(10, 20, 400, 2);
+    Node p = Node(State{});
+    p.n = 31;
+    auto child1 = Node(&p, Move{}, State{});
+    child1.n = 11;
+    auto child2 = Node(&p, Move{}, State{});
+    child2.n = 10;
+    auto child3 = Node(&p, Move{}, State{});
+    child3.n = 10;
+    child3.w = 1; // 9 wins from parent
+    return child1.score(2) < child2.score(2)
+           && child2.score(2) > child3.score(2)
+           && child1.score(1) < child1.score(2);
 }
-//
-bool testBestMoveWithThreeSquares() {
-    State s{1152921504602650622, 0};
-    Mcts mcts;
-    auto move_state = mcts.mcts(s, 2.0, 0.05);
 
-    return move_state.first == 0
-           && mcts.winChances(s, move_state.first) > 0.9;
+
+bool testBestMoveWithThreeSquares() {
+    auto s = State{1152921504602650622, 0};
+    Mcts mcts = Mcts(s, 2.0);
+    auto node = mcts.mcts(10.0, 100);
+    float chances = (float) node->wins() / (float) node->n;
+
+    return node->m == 0 && chances > 0.9;
 }
 
 bool testBestMoveWithTwoSquares() {
     State s{1152921504606844926, 0};
-    Mcts mcts;
+    Mcts mcts = Mcts(s, 2.0);
 
-    auto move_state = mcts.mcts(s, 2.0, 0.05);
+    auto node = mcts.mcts(10.0, 100);
+    float chances = (float) node->wins() / (float) node->n;
 
     // both moves are a win
-    return mcts.winChances(s, move_state.first) > 0.9;
+    return chances > 0.9;
 }
 
 bool testLosingWithThreeSquares() {
     State s{1152921504602650622, 1 << 3};
-    Mcts mcts;
+    Mcts mcts = Mcts(s, 2.0);
 
-    auto move_state = mcts.mcts(s, 2.0, 0.05);
+    auto node = mcts.mcts(10.0, 100);
+    float chances = (float) node->wins() / (float) node->n;
 
-    return mcts.winChances(s, move_state.first) < 0.1;
+    return chances < 0.1;
 }
 
 bool testWinAgainstRandomized() {
     State s{0, 0};
-    Mcts mcts_state;
     bool is_mcts = true;
+    Mcts mcts = Mcts(s, 2.0);
 
     unordered_map<Move, State> moves;
     do {
         Move m;
         if (is_mcts) {
-            m = mcts_state.mcts(s, 2.0, 0.05).first;
+            m = mcts.mcts(10.0, 100)->m;
+            mcts.updateRoot(m);
         } else {
             m = s.randomMove().value().first;
+            mcts.updateRoot(m);
         }
         s = s.play(m).value();
         moves = s.validMoves();
@@ -661,14 +645,12 @@ bool testWinAgainstRandomized() {
               << " testLosingWithThreeSquares" << std::endl;
     std::cout << testWinAgainstRandomized()
               << " testWinAgainstRandomized" << std::endl;
-
 }
 
 int main() {
-//    test();
-    game();
+    test();
+//    game();
 
-    // todo reduce memory - use tree structure
     // todo figure out good simulate() for start of game
 
     return 0;
