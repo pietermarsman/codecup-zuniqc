@@ -250,9 +250,10 @@ public:
 
 class Mcts {
 public:
-    explicit Mcts(State s, float constant) {
+    explicit Mcts(State s, float constant, ulong expandAfterVisits=1) {
         t = make_shared<Node>(s);
         c = constant;
+        minExpand = expandAfterVisits;
     }
 
     // Execute mcts searches for fixed duration.
@@ -275,6 +276,9 @@ public:
     }
 
     void updateRoot(Move move) {
+        if (!t->expanded) {
+            t->expand();
+        }
         shared_ptr<Node> node;
         for (const auto &child: t->children) {
             if (child->m == move) {
@@ -291,9 +295,9 @@ public:
         float max_move_time = time_left / 2.0F;
         float min_move_time = time_left / (moves_left + 1);
 
-        if (moves_left < 20) {
+        if (moves_left < 25) {
             return min(min_move_time * 4.0F, max_move_time);
-        } else if (moves_left < 35) {
+        } else if (moves_left < 40) {
             return min(min_move_time * 2.0F, max_move_time);
         } else {
             return min(min_move_time * 0.5F, max_move_time);
@@ -303,12 +307,13 @@ public:
 private:
     shared_ptr<Node> t;
     float c;
+    ulong minExpand;
 
     void search(shared_ptr<Node> n) const {
         while (n->expanded && !n->children.empty()) {
             n = n->bestMove(c);
         }
-        if (!n->expanded) {
+        if (!n->expanded && n->n >= minExpand) {
             // stopped because it is not yet expanded, not because it has no
             // children.
             n->expand();
@@ -434,7 +439,7 @@ uint positionToInt(const string &pos) {
 
 void game() {
     float total_ms = 0;
-    Mcts mcts = Mcts(State{}, sqrt(2.0F));
+    Mcts mcts = Mcts(State{}, sqrt(2.0F), 2);
 
     string text = read();
     while (text != QUIT) {
@@ -443,14 +448,13 @@ void game() {
         if (text != START) {
             // assuming input is always correct
             Move move = positionToInt(text);
-            mcts.mcts(1.0, 1);
             mcts.updateRoot(move);
         }
         float duration = mcts.timeBudget(total_ms / 1000.0F);
         log("Spending " + to_string(duration) + "s of "
             + to_string(30.0F - total_ms / 1000.0F) + "s that are left.\n");
 
-        auto best_node = mcts.mcts(duration, 50000);
+        auto best_node = mcts.mcts(duration);
         mcts.updateRoot(best_node->m);
         logMcts(best_node);
         logState(best_node->s, 1);
