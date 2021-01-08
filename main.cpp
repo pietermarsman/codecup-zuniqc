@@ -296,7 +296,7 @@ public:
         } else if (moves_left < 35) {
             return min(min_move_time * 2.0F, max_move_time);
         } else {
-            return min(min_move_time * 0.1F, max_move_time);
+            return min(min_move_time * 0.5F, max_move_time);
         }
     }
 
@@ -343,8 +343,6 @@ string INT_TO_POSITION[N] = {"A1h", "A2h", "A3h", "A4h", "A5h",
                              "E1h", "E2h", "E3h", "E4h", "E5h",
                              "E1v", "E2v", "E3v", "E4v", "E5v", "E6v",
                              "F1h", "F2h", "F3h", "F4h", "F5h"};
-
-
 
 
 // Game functions.
@@ -445,21 +443,21 @@ void game() {
         if (text != START) {
             // assuming input is always correct
             Move move = positionToInt(text);
+            mcts.mcts(1.0, 1);
             mcts.updateRoot(move);
         }
         float duration = mcts.timeBudget(total_ms / 1000.0F);
         log("Spending " + to_string(duration) + "s of "
             + to_string(30.0F - total_ms / 1000.0F) + "s that are left.\n");
 
-        auto best_node = mcts.mcts(duration);
+        auto best_node = mcts.mcts(duration, 50000);
+        mcts.updateRoot(best_node->m);
         logMcts(best_node);
         logState(best_node->s, 1);
-        mcts.updateRoot(best_node->m);
         write(INT_TO_POSITION[best_node->m]);
 
         auto end_time = high_resolution_clock::now();
         total_ms += duration_cast<milliseconds>(end_time - start_time).count();
-        logState(best_node->s);
         text = read();
     }
 }
@@ -605,7 +603,7 @@ bool testWinAgainstRandomized() {
     do {
         Move m;
         if (is_mcts) {
-            m = mcts.mcts(10.0, 100)->m;
+            m = mcts.mcts(10.0, 10000)->m;
             mcts.updateRoot(m);
         } else {
             m = s.randomMove().value().first;
@@ -648,8 +646,8 @@ bool testWinAgainstRandomized() {
 }
 
 int main() {
-    test();
-//    game();
+//    test();
+    game();
 
     // todo figure out good simulate() for start of game
 
