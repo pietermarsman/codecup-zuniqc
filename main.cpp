@@ -367,7 +367,7 @@ void log(const string &s) {
 void logMcts(const shared_ptr<Node> &node) {
     float win_chances = (float) node->wins() / (float) node->n;
     log("Chances of winning are " + to_string(node->wins()) + " / "
-        + to_string(node->n) + " = " + to_string(win_chances));
+        + to_string(node->n) + " = " + to_string(win_chances) + "\n");
 }
 
 void logBoard(Board b) {
@@ -547,7 +547,7 @@ bool testSpeedSimulate() {
     auto duration = duration_cast<microseconds>(stop - start);
 //    log(to_string(duration.count()));
     // 50ms, 50 microseconds per simulation
-    return duration.count() < 50000 && wins > 400 && wins < 600;
+    return duration.count() < 50000 && wins > 100 && wins < 900;
 }
 
 bool testScore() {
