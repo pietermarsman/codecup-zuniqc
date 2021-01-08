@@ -290,7 +290,7 @@ public:
     }
 
     float timeBudget(float total_time) {
-        float time_left = 29.0F - total_time;
+        float time_left = 27.0F - total_time;
         float moves_left = t->s.validMoves().size();
         float max_move_time = time_left / 2.0F;
         float min_move_time = time_left / (moves_left + 1);
