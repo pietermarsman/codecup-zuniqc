@@ -6,7 +6,7 @@ using namespace chrono;
 
 // Integer types.
 using Board = long long;
-using Zones = long long;
+using Zones = long;
 using Move = uint;
 
 // Board sizes.
@@ -42,6 +42,8 @@ class State {
 public:
     Board b = 0;
     Zones z = 0;
+    uint depth = 0;
+    uint extra = 0;
 
     // State functions.
     [[nodiscard]] optional<State> play(Move m) const {
@@ -56,7 +58,14 @@ public:
             return nullopt;
         }
         Zones zz = updateZones(z, zone);
-        return State{bb, zz};
+
+        uint addedExtra = 0;
+        if (zone > 1) {
+            Board inner = bb & ~maybe_b.value();
+            addedExtra = countOnes(inner) + 1 - zone;
+        }
+
+        return State{bb, zz, depth+1, extra+addedExtra};
     }
 
     [[nodiscard]] unordered_map<Move, State> validMoves() const {
@@ -154,7 +163,6 @@ private:
 
     // Zone functions.
     static uint countEnclosedTiles(Board b) {
-        b = fillEnclosed(b);
         Board shiftBack = b & (b >> M) & (b >> W) & (b >> (W + 1));
         return countOnes(b & shiftBack & HORIZONTAL & ~BOTTOM);
     }
@@ -178,7 +186,6 @@ public:
     Node *p = nullptr;
     Move m = 0;  // most recent move
     State s = State{};
-    uint depth = 0;
 
     bool expanded = false;
     vector<shared_ptr<Node>> children;
@@ -196,7 +203,6 @@ public:
         p = parent;
         m = move;
         s = state;
-        depth = parent->depth + 1;
     }
 
     // mcts functions.
@@ -226,6 +232,10 @@ public:
     // wins from perspective of parent
     [[nodiscard]] ulong wins() const {
         return n - w;
+    }
+
+    [[nodiscard]] float winChances() const {
+        return (float) wins() / (float) n;
     }
 
     void expand() {
@@ -291,17 +301,21 @@ public:
 
     float timeBudget(float total_time) {
         float time_left = 27.0F - total_time;
-        float moves_left = t->s.validMoves().size();
+        float moves_left = 41.0F - t->s.depth - t->s.extra;
         float max_move_time = time_left / 2.0F;
         float min_move_time = time_left / (moves_left + 1);
 
-        if (moves_left < 25) {
+        if (moves_left < 15) {
             return min(min_move_time * 4.0F, max_move_time);
-        } else if (moves_left < 40) {
+        } else if (moves_left < 30) {
             return min(min_move_time * 2.0F, max_move_time);
         } else {
-            return min(min_move_time * 1.0F, max_move_time);
+            return min(min_move_time * 0.1F, max_move_time);
         }
+    }
+
+    shared_ptr<Node> getTree() {
+        return t;
     }
 
 private:
@@ -318,8 +332,10 @@ private:
             // children.
             n->expand();
         }
-        ulong win = n->s.simulate();
-        n->backPropagate(win);
+        for (uint i=0; i < minExpand; i++) {
+            ulong win = n->s.simulate();
+            n->backPropagate(win);
+        }
     }
 
     // Best move to play is the one with the most simulations
@@ -368,9 +384,8 @@ void log(const string &s) {
 }
 
 void logMcts(const shared_ptr<Node> &node) {
-    float win_chances = (float) node->wins() / (float) node->n;
     log("Chances of winning are " + to_string(node->wins()) + " / "
-        + to_string(node->n) + " = " + to_string(win_chances) + "\n");
+        + to_string(node->n) + " = " + to_string(node->winChances()) + "\n");
 }
 
 void logBoard(Board b) {
@@ -417,6 +432,7 @@ void logState(State s, uint verbose = 2) {
             log(to_string(i) + ", ");
         }
         log("\n");
+        log("Extra enclosed walls: " + to_string(s.extra) + "\n");
     }
     if (verbose >= 0) {
         unordered_map<Move, State> moves = s.validMoves();
@@ -438,8 +454,7 @@ uint positionToInt(const string &pos) {
 }
 
 bool sureWin(const shared_ptr<Node>& node) {
-    float win_changes = (float) node->wins() / (float) node->n;
-    if ((node-> n > 10000) && (win_changes > 0.9)) {
+    if ((node-> n > 10000) && (node->winChances() > 0.9)) {
         return true;
     }
     return false;
@@ -464,8 +479,8 @@ void game() {
             + to_string(30.0F - total_ms / 1000.0F) + "s that are left.\n");
 
         auto best_node = mcts.mcts(duration);
+        logMcts(mcts.getTree());
         mcts.updateRoot(best_node->m);
-        logMcts(best_node);
         logState(best_node->s, 1);
 
         if (!i_am_winning && sureWin(best_node)) {
@@ -587,9 +602,8 @@ bool testBestMoveWithThreeSquares() {
     auto s = State{1152921504602650622, 0};
     Mcts mcts = Mcts(s, 2.0);
     auto node = mcts.mcts(10.0, 100);
-    float chances = (float) node->wins() / (float) node->n;
 
-    return node->m == 0 && chances > 0.9;
+    return node->m == 0 && node->winChances() > 0.9;
 }
 
 bool testBestMoveWithTwoSquares() {
@@ -597,10 +611,9 @@ bool testBestMoveWithTwoSquares() {
     Mcts mcts = Mcts(s, 2.0);
 
     auto node = mcts.mcts(10.0, 100);
-    float chances = (float) node->wins() / (float) node->n;
 
     // both moves are a win
-    return chances > 0.9;
+    return node->winChances() > 0.9;
 }
 
 bool testLosingWithThreeSquares() {
@@ -608,9 +621,8 @@ bool testLosingWithThreeSquares() {
     Mcts mcts = Mcts(s, 2.0);
 
     auto node = mcts.mcts(10.0, 100);
-    float chances = (float) node->wins() / (float) node->n;
 
-    return chances < 0.1;
+    return node->winChances() < 0.1;
 }
 
 bool testWinAgainstRandomized() {
@@ -667,8 +679,6 @@ bool testWinAgainstRandomized() {
 int main() {
 //    test();
     game();
-
-    // todo figure out good simulate() for start of game
 
     return 0;
 }
