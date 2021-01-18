@@ -44,9 +44,10 @@ public:
     Zones z = 0;
     uint depth = 0;
     uint extra = 0;
+    Board excluded = 0;
 
     // State functions.
-    [[nodiscard]] optional<State> play(Move m) const {
+    [[nodiscard]] optional<State> play(Move m) {
         const auto maybe_b = put(b, m);
         if (!maybe_b.has_value()) {
             return nullopt;
@@ -55,6 +56,12 @@ public:
         Board bb = fillEnclosed(maybe_b.value());
         uint zone = countAddedZones(b, bb);
         if ((z >> zone & 1) == 1) {
+            // zone already taken: check if move can always be excluded
+            bool exclude = (((1 << (zone + 1)) - 1) & z) > 0;
+            if (exclude) {
+                excluded = excluded | (ONE << m);
+            }
+
             return nullopt;
         }
         Zones zz = updateZones(z, zone);
@@ -65,25 +72,26 @@ public:
             addedExtra = countOnes(inner) + 1 - zone;
         }
 
-        return State{bb, zz, depth + 1, extra + addedExtra};
+        return State{bb, zz, depth + 1, extra + addedExtra,
+                     excluded};
     }
 
-    [[nodiscard]] vector<pair<Move, State>> validMoves() const {
+    [[nodiscard]] vector<pair<Move, State>> validMoves() {
         vector<pair<Move, State>> moves;
-        bitset<N> bits = b;
+        bitset<N> bits = b | excluded;
         for (int i = 0; i < N; ++i) {
             if (bits[i] == 0) {
                 auto maybe_s = play(i);
                 if (maybe_s.has_value()) {
-                    moves.push_back({i, maybe_s.value()});
+                    moves.emplace_back(i, maybe_s.value());
                 }
             }
         }
         return moves;
     }
 
-    [[nodiscard]] optional<pair<Move, State>> randomMove() const {
-        bitset<N> bBits = b;
+    [[nodiscard]] optional<pair<Move, State>> randomMove() {
+        bitset<N> bBits = b | excluded;
         uint shift = random() % N;
         for (uint i = 0; i < N; i++) {
             uint j = (i + shift) % N;
@@ -114,7 +122,7 @@ public:
         return b == s.b && z == s.z;
     }
 
-    [[nodiscard]] ulong simulate() const {
+    [[nodiscard]] ulong simulate() {
         auto maybe_state = randomMove();
         if (maybe_state.has_value()) {
             return 1 - maybe_state.value().second.simulate();
@@ -676,7 +684,8 @@ bool testWinAgainstRandomized() {
 }
 
 // 2021-01-17 8.35193s, 8.35193us per iter
-// 2021-01-18 6.66694s, 6.66694us per iter
+// 2021-01-18 6.66694s, 6.66694us per iter - vector instead of unordered_map
+// 2021-01-18 6.32424s, 6.32424us per iter - remember excluded zones
 void profile() {
     const uint iter = 1000000;
     State s{0, 0};
@@ -693,10 +702,9 @@ void profile() {
 
 int main() {
 //    test();
-    game();
-//    profile();
+//    game();
+    profile();
 
-    // todo exclude walls that never will be played
     // todo early stopping if mcts is certain enough
     // todo use sign of zones as extra parity
     return 0;
