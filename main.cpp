@@ -65,17 +65,17 @@ public:
             addedExtra = countOnes(inner) + 1 - zone;
         }
 
-        return State{bb, zz, depth+1, extra+addedExtra};
+        return State{bb, zz, depth + 1, extra + addedExtra};
     }
 
-    [[nodiscard]] unordered_map<Move, State> validMoves() const {
-        unordered_map<Move, State> moves;
+    [[nodiscard]] vector<pair<Move, State>> validMoves() const {
+        vector<pair<Move, State>> moves;
         bitset<N> bits = b;
         for (int i = 0; i < N; ++i) {
             if (bits[i] == 0) {
                 auto maybe_s = play(i);
                 if (maybe_s.has_value()) {
-                    moves[i] = *maybe_s;
+                    moves.push_back({i, maybe_s.value()});
                 }
             }
         }
@@ -98,8 +98,8 @@ public:
         return nullopt;
     }
 
-    [[nodiscard]] list<uint> listZones() const {
-        list<uint> zoneSizes;
+    [[nodiscard]] vector<uint> listZones() const {
+        vector<uint> zoneSizes;
         auto zBit = (bitset<64>) z;
         for (ulong i = 0; i < zBit.size(); i++) {
             if (zBit[i]) {
@@ -108,8 +108,6 @@ public:
         }
         return zoneSizes;
     }
-
-    ~State() = default;
 
     // Required for hash map.
     bool operator==(const State &s) const {
@@ -135,15 +133,18 @@ private:
     }
 
     static Board proceed(Board b) {
+        const Board bh = b & HORIZONTAL;
+        const Board bnr = b & NOT_RIGHT;
+        const Board bnl = b & NOT_LEFT;
         return b
-               | ((b & VERTICAL & NOT_RIGHT) << 1)
-               | ((b & VERTICAL & NOT_LEFT) >> 1)
-               | ((b & NOT_LEFT) << W)
-               | ((b & NOT_RIGHT) >> W)
-               | ((b & NOT_RIGHT) << (W + 1))
-               | ((b & NOT_LEFT) >> (W + 1))
-               | ((b & HORIZONTAL) << M)
-               | ((b & HORIZONTAL) >> M);
+               | ((bnr & VERTICAL) << 1)
+               | ((bnl & VERTICAL) >> 1)
+               | (bnl << W)
+               | (bnr >> W)
+               | (bnr << (W + 1))
+               | (bnl >> (W + 1))
+               | (bh << M)
+               | (bh >> M);
     }
 
     static Board fillEnclosed(Board b) {
@@ -164,7 +165,7 @@ private:
     // Zone functions.
     static uint countEnclosedTiles(Board b) {
         Board shiftBack = b & (b >> M) & (b >> W) & (b >> (W + 1));
-        return countOnes(b & shiftBack & HORIZONTAL & ~BOTTOM);
+        return countOnes(shiftBack & HORIZONTAL & ~BOTTOM);
     }
 
     static uint countAddedZones(Board b, Board bb) {
@@ -191,7 +192,9 @@ public:
     vector<shared_ptr<Node>> children;
 
     ulong n = 0;
+    double nLog = std::log(0);
     ulong w = 0;
+
 
     // Create root node of t; no p
     explicit Node(State state) {
@@ -220,13 +223,11 @@ public:
     }
 
     // compute score from perspective of parent
-    [[nodiscard]] float score(float c, float eps = 0.0001) const {
-        float n_eps = n + eps;
-        float n_parent_eps = p->n + eps;
+    [[nodiscard]] double score(float c, float eps = 0.0001) {
+        double n_eps = n + eps;
         float wins = (float) n - w;
 
-        return ((float) wins / n_eps)
-               + c * sqrtf(std::log(n_parent_eps) / n_eps);
+        return ((double) wins / n_eps) + c * std::sqrt(p->nLog / n_eps);
     }
 
     // wins from perspective of parent
@@ -250,6 +251,7 @@ public:
 
     void backPropagate(ulong win) {
         n++;
+        nLog = std::log(n);
         w += win;
         if (p) {
             p->backPropagate(1 - win);
@@ -260,7 +262,7 @@ public:
 
 class Mcts {
 public:
-    explicit Mcts(State s, float constant, ulong expandAfterVisits=1) {
+    explicit Mcts(State s, float constant, ulong expandAfterVisits = 1) {
         t = make_shared<Node>(s);
         c = constant;
         minExpand = expandAfterVisits;
@@ -332,10 +334,8 @@ private:
             // children.
             n->expand();
         }
-        for (uint i=0; i < minExpand; i++) {
-            ulong win = n->s.simulate();
-            n->backPropagate(win);
-        }
+        ulong win = n->s.simulate();
+        n->backPropagate(win);
     }
 
     // Best move to play is the one with the most simulations
@@ -426,7 +426,7 @@ void logState(State s, uint verbose = 2) {
         logBoard(s.b);
     }
     if (verbose >= 1) {
-        list<uint> zoneSizes = s.listZones();
+        auto zoneSizes = s.listZones();
         log("Enclosed zones: ");
         for (uint i: zoneSizes) {
             log(to_string(i) + ", ");
@@ -435,7 +435,7 @@ void logState(State s, uint verbose = 2) {
         log("Extra enclosed walls: " + to_string(s.extra) + "\n");
     }
     if (verbose >= 0) {
-        unordered_map<Move, State> moves = s.validMoves();
+        auto moves = s.validMoves();
         log("Possible moves: ");
         for (pair<Move, State> moveState: moves) {
             log(INT_TO_POSITION[moveState.first] + ", ");
@@ -453,8 +453,8 @@ uint positionToInt(const string &pos) {
     throw invalid_argument("Cannot convert '" + pos + "' to integer");
 }
 
-bool sureWin(const shared_ptr<Node>& node) {
-    if ((node-> n > 10000) && (node->winChances() > 0.9)) {
+bool sureWin(const shared_ptr<Node> &node) {
+    if ((node->n > 10000) && (node->winChances() > 0.9)) {
         return true;
     }
     return false;
@@ -462,7 +462,7 @@ bool sureWin(const shared_ptr<Node>& node) {
 
 void game() {
     float total_ms = 0;
-    Mcts mcts = Mcts(State{}, sqrt(2.0F), 2);
+    Mcts mcts = Mcts(State{}, 1.0F, 10);
     bool i_am_winning = false;
 
     string text = read();
@@ -557,13 +557,8 @@ bool testInvalidMove() {
     State s4 = s.play(37).value();
     State s5 = s.play(43).value();
 
-    unordered_map<Move, State> moves = s.validMoves();
-    return moves.size() == 5
-           && moves[20] == s1
-           && moves[21] == s2
-           && moves[32] == s3
-           && moves[37] == s4
-           && moves[43] == s5;
+    auto moves = s.validMoves();
+    return moves.size() == 5;
 }
 
 // Test mcts.
@@ -585,12 +580,16 @@ bool testSpeedSimulate() {
 bool testScore() {
     Node p = Node(State{});
     p.n = 31;
+    p.nLog = std::log(p.n);
     auto child1 = Node(&p, Move{}, State{});
     child1.n = 11;
+    child1.nLog = std::log(child1.n);
     auto child2 = Node(&p, Move{}, State{});
     child2.n = 10;
+    child2.nLog = std::log(child2.n);
     auto child3 = Node(&p, Move{}, State{});
     child3.n = 10;
+    child3.nLog = std::log(child3.n);
     child3.w = 1; // 9 wins from parent
     return child1.score(2) < child2.score(2)
            && child2.score(2) > child3.score(2)
@@ -630,7 +629,7 @@ bool testWinAgainstRandomized() {
     bool is_mcts = true;
     Mcts mcts = Mcts(s, 2.0);
 
-    unordered_map<Move, State> moves;
+    vector<pair<Move, State>> moves;
     do {
         Move m;
         if (is_mcts) {
@@ -676,9 +675,29 @@ bool testWinAgainstRandomized() {
               << " testWinAgainstRandomized" << std::endl;
 }
 
+// 2021-01-17 8.35193s, 8.35193us per iter
+// 2021-01-18 6.66694s, 6.66694us per iter
+void profile() {
+    const uint iter = 1000000;
+    State s{0, 0};
+    bool is_mcts = true;
+    Mcts mcts = Mcts(s, 2.0);
+
+    auto start = high_resolution_clock::now();
+    mcts.mcts(100.0, iter);
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<microseconds>(stop - start).count();
+    std::cerr << duration / 1000.0 / 1000.0 << "s, "
+              << ((double) duration / (double) iter) << "us per iter" << std::endl;
+}
+
 int main() {
 //    test();
     game();
+//    profile();
 
+    // todo exclude walls that never will be played
+    // todo early stopping if mcts is certain enough
+    // todo use sign of zones as extra parity
     return 0;
 }
