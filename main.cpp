@@ -57,7 +57,8 @@ public:
         uint zone = countAddedZones(b, bb);
         if ((z >> zone & 1) == 1) {
             // zone already taken: check if move can always be excluded
-            bool exclude = (((1 << (zone + 1)) - 1) & z) > 0;
+            int smaller_zones = (1 << (zone + 1)) - 1;
+            bool exclude = (smaller_zones & z) == smaller_zones;
             if (exclude) {
                 excluded = excluded | (ONE << m);
             }
@@ -78,29 +79,34 @@ public:
 
     [[nodiscard]] vector<pair<Move, State>> validMoves() {
         vector<pair<Move, State>> moves;
-        bitset<N> bits = b | excluded;
-        for (int i = 0; i < N; ++i) {
-            if (bits[i] == 0) {
-                auto maybe_s = play(i);
-                if (maybe_s.has_value()) {
-                    moves.emplace_back(i, maybe_s.value());
-                }
+        bitset<N> bits = ~(b | excluded);
+        for (uint i = bits._Find_first();
+             i < bits.size(); i = bits._Find_next(i)) {
+            auto maybe_s = play(i);
+            if (maybe_s.has_value()) {
+                moves.emplace_back(i, maybe_s.value());
             }
         }
         return moves;
     }
 
     [[nodiscard]] optional<pair<Move, State>> randomMove() {
-        bitset<N> bBits = b | excluded;
+        bitset<N> bits = ~(b | excluded);
         uint shift = random() % N;
-        for (uint i = 0; i < N; i++) {
-            uint j = (i + shift) % N;
-            if (bBits[j] == 0) {
-                auto maybe_s = play(j);
-                if (maybe_s.has_value()) {
-                    const auto ms = pair<Move, State>{j, maybe_s.value()};
-                    return ms;
-                }
+        // from `shift` to end
+        for (int i = bits._Find_next(shift);
+             i < bits.size(); i = bits._Find_next(i)) {
+            auto maybe_s = play(i);
+            if (maybe_s.has_value()) {
+                return pair<Move, State>{i, maybe_s.value()};
+            }
+        }
+        // from start to `shift`
+        for (int i = bits._Find_first();
+             i < shift; i = bits._Find_next(i)) {
+            auto maybe_s = play(i);
+            if (maybe_s.has_value()) {
+                return pair<Move, State>{i, maybe_s.value()};
             }
         }
         return nullopt;
@@ -243,6 +249,7 @@ public:
         return n - w;
     }
 
+    // winChances from perspective of parent
     [[nodiscard]] float winChances() const {
         return (float) wins() / (float) n;
     }
@@ -686,10 +693,10 @@ bool testWinAgainstRandomized() {
 // 2021-01-17 8.35193s, 8.35193us per iter
 // 2021-01-18 6.66694s, 6.66694us per iter - vector instead of unordered_map
 // 2021-01-18 6.32424s, 6.32424us per iter - remember excluded zones
+// 2021-01-19 6.12408s, 6.12408us per iter - use bitset._Find_next()
 void profile() {
     const uint iter = 1000000;
     State s{0, 0};
-    bool is_mcts = true;
     Mcts mcts = Mcts(s, 2.0);
 
     auto start = high_resolution_clock::now();
@@ -697,14 +704,16 @@ void profile() {
     auto stop = high_resolution_clock::now();
     auto duration = duration_cast<microseconds>(stop - start).count();
     std::cerr << duration / 1000.0 / 1000.0 << "s, "
-              << ((double) duration / (double) iter) << "us per iter" << std::endl;
+              << ((double) duration / (double) iter) << "us per iter"
+              << std::endl;
 }
 
 int main() {
 //    test();
-//    game();
-    profile();
+    game();
+//    profile();
 
+    // todo delete state after expanded, or don't save state at all to save memory
     // todo early stopping if mcts is certain enough
     // todo use sign of zones as extra parity
     return 0;
