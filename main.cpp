@@ -80,7 +80,7 @@ public:
     [[nodiscard]] vector<pair<Move, State>> validMoves() {
         vector<pair<Move, State>> moves;
         bitset<N> bits = ~(b | excluded);
-        for (uint i = bits._Find_first();
+        for (long unsigned int i = bits._Find_first();
              i < bits.size(); i = bits._Find_next(i)) {
             auto maybe_s = play(i);
             if (maybe_s.has_value()) {
@@ -94,7 +94,7 @@ public:
         bitset<N> bits = ~(b | excluded);
         uint shift = random() % N;
         // from `shift` to end
-        for (int i = bits._Find_next(shift);
+        for (long unsigned int i = bits._Find_next(shift);
              i < bits.size(); i = bits._Find_next(i)) {
             auto maybe_s = play(i);
             if (maybe_s.has_value()) {
@@ -102,7 +102,7 @@ public:
             }
         }
         // from start to `shift`
-        for (int i = bits._Find_first();
+        for (uint i = bits._Find_first();
              i < shift; i = bits._Find_next(i)) {
             auto maybe_s = play(i);
             if (maybe_s.has_value()) {
@@ -200,26 +200,21 @@ class Node {
 public:
     Node *p = nullptr;
     Move m = 0;  // most recent move
-    State s = State{};
 
     bool expanded = false;
     vector<shared_ptr<Node>> children;
 
     ulong n = 0;
-    double nLog = std::log(0);
+    float nLog = std::log(0);
     ulong w = 0;
 
-
     // Create root node of t; no p
-    explicit Node(State state) {
-        s = state;
-    }
+    explicit Node() = default;
 
     // Create intermediate node of t
-    explicit Node(Node *parent, Move move, State state) {
+    explicit Node(Node *parent, Move move) {
         p = parent;
         m = move;
-        s = state;
     }
 
     // mcts functions.
@@ -254,12 +249,9 @@ public:
         return (float) wins() / (float) n;
     }
 
-    void expand() {
-        assert (!expanded);
+    void expand(State s) {
         for (auto move_state : s.validMoves()) {
-            auto child = make_shared<Node>(this, move_state.first,
-                                           move_state.second);
-            children.push_back(child);
+            children.push_back(make_shared<Node>(this, move_state.first));
         }
         expanded = true;
     }
@@ -278,7 +270,8 @@ public:
 class Mcts {
 public:
     explicit Mcts(State s, float constant, ulong expandAfterVisits = 1) {
-        t = make_shared<Node>(s);
+        root = s;
+        t = make_shared<Node>();
         c = constant;
         minExpand = expandAfterVisits;
     }
@@ -293,7 +286,7 @@ public:
         ulong i = 0;
         do {
             i++;
-            search(t);
+            search();
             duration = duration_cast<microseconds>(
                     high_resolution_clock::now() - start);
         } while ((duration.count() / 1000.0 / 1000.0) < duration_secs
@@ -302,23 +295,26 @@ public:
         return getBestMove();
     }
 
-    void updateRoot(Move move) {
+    State updateRoot(Move move) {
         if (!t->expanded) {
-            t->expand();
+            t->expand(root);
         }
-        shared_ptr<Node> node;
+        Move m = 0;
         for (const auto &child: t->children) {
             if (child->m == move) {
-                node = child;
+                t = child;
+                m = move;
+                break;
             }
         }
-        t = node;
+        root = root.play(m).value();
         t->p = nullptr;
+        return root;
     }
 
     float timeBudget(float total_time) {
         float time_left = 27.0F - total_time;
-        float moves_left = 41.0F - t->s.depth - t->s.extra;
+        float moves_left = 41.0F - root.depth - root.extra;
         float max_move_time = time_left / 2.0F;
         float min_move_time = time_left / (moves_left + 1);
 
@@ -336,20 +332,24 @@ public:
     }
 
 private:
+    State root;
     shared_ptr<Node> t;
     float c;
     ulong minExpand;
 
-    void search(shared_ptr<Node> n) const {
+    void search() const {
+        shared_ptr<Node> n = t;
+        State s = root;
         while (n->expanded && !n->children.empty()) {
             n = n->bestMove(c);
+            s = s.play(n->m).value();
         }
         if (!n->expanded && n->n >= minExpand) {
             // stopped because it is not yet expanded, not because it has no
             // children.
-            n->expand();
+            n->expand(s);
         }
-        ulong win = n->s.simulate();
+        ulong win = s.simulate();
         n->backPropagate(win);
     }
 
@@ -495,8 +495,8 @@ void game() {
 
         auto best_node = mcts.mcts(duration);
         logMcts(mcts.getTree());
-        mcts.updateRoot(best_node->m);
-        logState(best_node->s, 1);
+        State root = mcts.updateRoot(best_node->m);
+        logState(root, 1);
 
         if (!i_am_winning && sureWin(best_node)) {
             write(INT_TO_POSITION[best_node->m] + "!");
@@ -566,11 +566,11 @@ bool testPlayingSquareTile() {
 bool testInvalidMove() {
     Board b = 1152894691084558198;
     auto s = State{b, 30};
-    State s1 = s.play(20).value();
-    State s2 = s.play(21).value();
-    State s3 = s.play(32).value();
-    State s4 = s.play(37).value();
-    State s5 = s.play(43).value();
+    s = s.play(20).value();
+    s = s.play(21).value();
+    s = s.play(32).value();
+    s = s.play(37).value();
+    s = s.play(43).value();
 
     auto moves = s.validMoves();
     return moves.size() == 5;
@@ -593,16 +593,16 @@ bool testSpeedSimulate() {
 }
 
 bool testScore() {
-    Node p = Node(State{});
+    Node p = Node();
     p.n = 31;
     p.nLog = std::log(p.n);
-    auto child1 = Node(&p, Move{}, State{});
+    auto child1 = Node(&p, Move{});
     child1.n = 11;
     child1.nLog = std::log(child1.n);
-    auto child2 = Node(&p, Move{}, State{});
+    auto child2 = Node(&p, Move{});
     child2.n = 10;
     child2.nLog = std::log(child2.n);
-    auto child3 = Node(&p, Move{}, State{});
+    auto child3 = Node(&p, Move{});
     child3.n = 10;
     child3.nLog = std::log(child3.n);
     child3.w = 1; // 9 wins from parent
@@ -646,7 +646,7 @@ bool testWinAgainstRandomized() {
 
     vector<pair<Move, State>> moves;
     do {
-        Move m;
+        Move m = 0;
         if (is_mcts) {
             m = mcts.mcts(10.0, 10000)->m;
             mcts.updateRoot(m);
@@ -694,6 +694,7 @@ bool testWinAgainstRandomized() {
 // 2021-01-18 6.66694s, 6.66694us per iter - vector instead of unordered_map
 // 2021-01-18 6.32424s, 6.32424us per iter - remember excluded zones
 // 2021-01-19 6.12408s, 6.12408us per iter - use bitset._Find_next()
+// 2021-01-19 5.97594s, 5.97594us per iter - don't save states in tree
 void profile() {
     const uint iter = 1000000;
     State s{0, 0};
@@ -710,10 +711,9 @@ void profile() {
 
 int main() {
 //    test();
-    game();
-//    profile();
+//    game();
+    profile();
 
-    // todo delete state after expanded, or don't save state at all to save memory
     // todo early stopping if mcts is certain enough
     // todo use sign of zones as extra parity
     return 0;
