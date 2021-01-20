@@ -232,11 +232,11 @@ public:
     }
 
     // compute score from perspective of parent
-    [[nodiscard]] double score(float c, float eps = 0.0001) {
-        double n_eps = n + eps;
+    [[nodiscard]] float score(float c, float eps = 0.0001) {
+        float n_eps = n + eps;
         float wins = (float) n - w;
 
-        return ((double) wins / n_eps) + c * std::sqrt(p->nLog / n_eps);
+        return ((float) wins / n_eps) + c * std::sqrt(p->nLog / n_eps);
     }
 
     // wins from perspective of parent
@@ -705,7 +705,7 @@ void profile() {
     auto stop = high_resolution_clock::now();
     auto duration = duration_cast<microseconds>(stop - start).count();
     std::cerr << duration / 1000.0 / 1000.0 << "s, "
-              << ((double) duration / (double) iter) << "us per iter"
+              << ((float) duration / (float) iter) << "us per iter"
               << std::endl;
 }
 
