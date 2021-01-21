@@ -566,11 +566,11 @@ bool testPlayingSquareTile() {
 bool testInvalidMove() {
     Board b = 1152894691084558198;
     auto s = State{b, 30};
-    s = s.play(20).value();
-    s = s.play(21).value();
-    s = s.play(32).value();
-    s = s.play(37).value();
-    s = s.play(43).value();
+    s.play(20).value();
+    s.play(21).value();
+    s.play(32).value();
+    s.play(37).value();
+    s.play(43).value();
 
     auto moves = s.validMoves();
     return moves.size() == 5;
