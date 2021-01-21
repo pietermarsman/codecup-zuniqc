@@ -359,7 +359,6 @@ public:
     [[nodiscard]] float timeBudget(float total_time) const {
         float time_left = 28.0F - total_time;
         float moves_left = 41.0F - root.depth;
-        std::cerr << moves_left << std::endl;
         float max_move_time = time_left / 2.0F;
         float min_move_time = time_left / (moves_left + 1);
 
