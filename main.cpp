@@ -48,6 +48,9 @@ public:
 
     // State functions.
     [[nodiscard]] optional<State> play(Move m) {
+        if (m >= N) {
+            return nullopt;
+        }
         const auto maybe_b = put(b, m);
         if (!maybe_b.has_value()) {
             return nullopt;
@@ -77,6 +80,7 @@ public:
                      excluded};
     }
 
+    // List all valid moves.
     [[nodiscard]] vector<pair<Move, State>> validMoves() {
         vector<pair<Move, State>> moves;
         bitset<N> bits = ~(b | excluded);
@@ -90,6 +94,26 @@ public:
         return moves;
     }
 
+    // List single next move that is equal or larger to `nextMoveIndex`.
+    [[nodiscard]] optional<pair<Move, State>> nextMove(ulong nextMoveIndex) {
+        bitset<N> bits = ~(b | excluded);
+        optional<pair<Move, State>> move_state = nullopt;
+        if (nextMoveIndex == 0) {
+            nextMoveIndex = bits._Find_first();
+        }
+        do {
+            auto maybe_s = play(nextMoveIndex);
+            if (maybe_s.has_value()) {
+                 move_state = {nextMoveIndex, maybe_s.value()};
+            }
+            // always makes nextMoveIndex larger, unless nextMoveIndex is larger
+            // than bits.size()
+            nextMoveIndex = bits._Find_next(nextMoveIndex);
+        } while (nextMoveIndex < bits.size() && !move_state.has_value());
+        return move_state;
+    }
+
+    // Return single possible random move or `nullopt`.
     [[nodiscard]] optional<pair<Move, State>> randomMove() {
         bitset<N> bits = ~(b | excluded);
         uint shift = random() % N;
@@ -112,6 +136,7 @@ public:
         return nullopt;
     }
 
+    // List all zones by their size
     [[nodiscard]] vector<uint> listZones() const {
         vector<uint> zoneSizes;
         auto zBit = (bitset<64>) z;
@@ -128,6 +153,7 @@ public:
         return b == s.b && z == s.z;
     }
 
+    // Simulate a game by playing random moves.
     [[nodiscard]] ulong simulate() {
         auto maybe_state = randomMove();
         if (maybe_state.has_value()) {
@@ -146,6 +172,8 @@ private:
         return b | ONE << m;
     }
 
+    // Proceed board one step by enabling all walls one step away from an
+    // already enabled wall.
     static Board proceed(Board b) {
         const Board bh = b & HORIZONTAL;
         const Board bnr = b & NOT_RIGHT;
@@ -161,6 +189,7 @@ private:
                | (bh >> M);
     }
 
+    // Enable all enclosed walls.
     static Board fillEnclosed(Board b) {
         Board bb = (b ^ FULL) & BORDER;
         Board previous;
@@ -172,20 +201,23 @@ private:
         return b | (bb ^ FULL);
     }
 
+    // Count ones on board.
     static uint countOnes(Board b) {
         return ((bitset<64>) b).count();
     }
 
-    // Zone functions.
+    // Count number of tiles that are enabled on all four edges.
     static uint countEnclosedTiles(Board b) {
         Board shiftBack = b & (b >> M) & (b >> W) & (b >> (W + 1));
         return countOnes(shiftBack & HORIZONTAL & ~BOTTOM);
     }
 
+    // Count the number of added tiles with all four edges enabled.
     static uint countAddedZones(Board b, Board bb) {
         return countEnclosedTiles(bb) - countEnclosedTiles(b);
     }
 
+    // Update the zones of the state.
     static Zones updateZones(Zones z, uint zone) {
         if (zone == 0) {
             return z;
@@ -202,6 +234,7 @@ public:
     Move m = 0;  // most recent move
 
     bool expanded = false;
+    ulong nextMoveIndex = 0;
     vector<shared_ptr<Node>> children;
 
     ulong n = 0;
@@ -217,7 +250,7 @@ public:
         m = move;
     }
 
-    // mcts functions.
+    // Return best move according to the mcts scoring function.
     shared_ptr<Node> bestMove(float c) {
         shared_ptr<Node> best;
         float best_score = -INFINITY;
@@ -231,31 +264,40 @@ public:
         return best;
     }
 
-    // compute score from perspective of parent
-    [[nodiscard]] float score(float c, float eps = 0.0001) {
+    // Compute score of node from perspective of parent.
+    [[nodiscard]] float score(float c, float eps = 0.0001) const {
         float n_eps = n + eps;
         float wins = (float) n - w;
 
         return ((float) wins / n_eps) + c * std::sqrt(p->nLog / n_eps);
     }
 
-    // wins from perspective of parent
+    // Compute wins of node from perspective of parent.
     [[nodiscard]] ulong wins() const {
         return n - w;
     }
 
-    // winChances from perspective of parent
+    // Compute win chances from perspective of parent.
     [[nodiscard]] float winChances() const {
         return (float) wins() / (float) n;
     }
 
-    void expand(State s) {
-        for (auto move_state : s.validMoves()) {
-            children.push_back(make_shared<Node>(this, move_state.first));
+    // Expand one option of node and return the new node, or `nullptr` if
+    // it cannot be expanded further.
+    pair<shared_ptr<Node>, State> expand(State s) {
+        auto move_state = s.nextMove(nextMoveIndex);
+        if (move_state.has_value()) {
+            nextMoveIndex = move_state->first + 1;
+            auto node = make_shared<Node>(this, move_state->first);
+            children.push_back(node);
+            return {node, move_state->second};
+        } else {
+            expanded = true;
+            return {nullptr, State{}};
         }
-        expanded = true;
     }
 
+    // Back propagate win through all ancestors.
     void backPropagate(ulong win) {
         n++;
         nLog = std::log(n);
@@ -276,7 +318,7 @@ public:
         minExpand = expandAfterVisits;
     }
 
-    // Execute mcts searches for fixed duration.
+    // Execute mcts searches for fixed duration or number of iterations.
     shared_ptr<Node>
     mcts(float duration_secs, float max_iterations = INFINITY) {
         auto start = high_resolution_clock::now();
@@ -295,9 +337,10 @@ public:
         return getBestMove();
     }
 
+    // Change the root of the tree to the state that belongs to the `move`.
     State updateRoot(Move move) {
-        if (!t->expanded) {
-            t->expand(root);
+        while (!t->expanded) {
+            auto ret = t->expand(root);
         }
         Move m = 0;
         for (const auto &child: t->children) {
@@ -312,21 +355,24 @@ public:
         return root;
     }
 
-    float timeBudget(float total_time) {
-        float time_left = 27.0F - total_time;
-        float moves_left = 41.0F - root.depth - root.extra;
+    // Compute time to spend on computing the next best move.
+    [[nodiscard]] float timeBudget(float total_time) const {
+        float time_left = 28.0F - total_time;
+        float moves_left = 41.0F - root.depth;
+        std::cerr << moves_left << std::endl;
         float max_move_time = time_left / 2.0F;
         float min_move_time = time_left / (moves_left + 1);
 
         if (moves_left < 15) {
             return min(min_move_time * 4.0F, max_move_time);
-        } else if (moves_left < 30) {
+        } else if (moves_left < 27) {
             return min(min_move_time * 2.0F, max_move_time);
         } else {
-            return min(min_move_time * 0.1F, max_move_time);
+            return min(min_move_time * 0.2F, max_move_time);
         }
     }
 
+    // Get the tree.
     shared_ptr<Node> getTree() {
         return t;
     }
@@ -337,6 +383,7 @@ private:
     float c;
     ulong minExpand;
 
+    // Do single search, expanding node and simulate random playout.
     void search() const {
         shared_ptr<Node> n = t;
         State s = root;
@@ -347,7 +394,12 @@ private:
         if (!n->expanded && n->n >= minExpand) {
             // stopped because it is not yet expanded, not because it has no
             // children.
-            n->expand(s);
+            auto nn_ss = n->expand(s);
+            if (nn_ss.first) {
+                n = nn_ss.first;
+                s = nn_ss.second;
+            }
+            // ignore else, because sometimes n does not have children
         }
         ulong win = s.simulate();
         n->backPropagate(win);
@@ -469,15 +521,15 @@ uint positionToInt(const string &pos) {
 }
 
 bool sureWin(const shared_ptr<Node> &node) {
-    if ((node->n > 10000) && (node->winChances() > 0.9)) {
+    if ((node->n > 10000) && (node->winChances() > 0.8)) {
         return true;
     }
     return false;
 }
 
-void game() {
+void game(float c, ulong expandAfter) {
     float total_ms = 0;
-    Mcts mcts = Mcts(State{}, 1.0F, 10);
+    Mcts mcts = Mcts(State{}, c, expandAfter);
     bool i_am_winning = false;
 
     string text = read();
@@ -494,8 +546,8 @@ void game() {
             + to_string(30.0F - total_ms / 1000.0F) + "s that are left.\n");
 
         auto best_node = mcts.mcts(duration);
-        logMcts(mcts.getTree());
         State root = mcts.updateRoot(best_node->m);
+        logMcts(mcts.getTree());
         logState(root, 1);
 
         if (!i_am_winning && sureWin(best_node)) {
@@ -644,20 +696,19 @@ bool testWinAgainstRandomized() {
     bool is_mcts = true;
     Mcts mcts = Mcts(s, 2.0);
 
-    vector<pair<Move, State>> moves;
+    optional<pair<Move, State>> moves;
     do {
-        Move m = 0;
+        Move m;
         if (is_mcts) {
-            m = mcts.mcts(10.0, 10000)->m;
-            mcts.updateRoot(m);
+            m = mcts.mcts(100000.0, 10000)->m;
+            s = mcts.updateRoot(m);
         } else {
             m = s.randomMove().value().first;
-            mcts.updateRoot(m);
+            s = mcts.updateRoot(m);
         }
-        s = s.play(m).value();
-        moves = s.validMoves();
+        moves = s.randomMove();
         is_mcts = !is_mcts;
-    } while (!moves.empty());
+    } while (!moves.has_value());
 
     return !is_mcts;
 }
@@ -695,7 +746,8 @@ bool testWinAgainstRandomized() {
 // 2021-01-18 6.32424s, 6.32424us per iter - remember excluded zones
 // 2021-01-19 6.12408s, 6.12408us per iter - use bitset._Find_next()
 // 2021-01-19 5.97594s, 5.97594us per iter - don't save states in tree
-void profile() {
+// 2021-01-21 4.46186s, 4.46186us per iter - only add 1 node during expand
+[[maybe_unused]] void profile() {
     const uint iter = 1000000;
     State s{0, 0};
     Mcts mcts = Mcts(s, 2.0);
@@ -711,10 +763,8 @@ void profile() {
 
 int main() {
 //    test();
-//    game();
-    profile();
+    game(1.0, 1);
+//    profile();
 
-    // todo early stopping if mcts is certain enough
-    // todo use sign of zones as extra parity
     return 0;
 }
