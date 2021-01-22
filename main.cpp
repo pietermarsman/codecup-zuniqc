@@ -762,7 +762,7 @@ bool testWinAgainstRandomized() {
 
 int main() {
 //    test();
-    game(1.0, 1);
+    game(0.5, 1);
 //    profile();
 
     return 0;
